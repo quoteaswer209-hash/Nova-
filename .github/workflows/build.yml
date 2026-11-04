@@ -1,0 +1,125 @@
+name: NOVA CHAT APK Builder
+
+"on":
+  workflow_dispatch:
+  push:
+    paths:
+      - NOVA_CHAT_COMPLETE_SOURCE.zip
+      - .github/workflows/build.yml
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build Android APK
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+
+      - name: Check ZIP File
+        run: |
+          if [ ! -f "NOVA_CHAT_COMPLETE_SOURCE.zip" ]; then
+            echo "ERROR: ZIP file not found!"
+            exit 1
+          fi
+          unzip -t NOVA_CHAT_COMPLETE_SOURCE.zip
+
+      - name: Extract ZIP
+        run: |
+          mkdir -p app
+          unzip -o NOVA_CHAT_COMPLETE_SOURCE.zip -d app
+
+      - name: Find Project
+        run: |
+          PACKAGE_FILE=$(find app -type f -name package.json \
+            -not -path "*/node_modules/*" \
+            -not -path "*/android/*" | head -n 1)
+
+          if [ -z "$PACKAGE_FILE" ]; then
+            echo "ERROR: package.json not found"
+            exit 1
+          fi
+
+          PROJECT_DIR=$(dirname "$PACKAGE_FILE")
+          echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
+
+          echo "Project directory: $PROJECT_DIR"
+
+      - name: Install Dependencies
+        run: |
+          cd "$PROJECT_DIR"
+
+          if [ -f package-lock.json ]; then
+            npm ci
+          else
+            npm install
+          fi
+
+      - name: Build Web Project
+        env:
+          VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
+          VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
+        run: |
+          cd "$PROJECT_DIR"
+          npm run build
+
+      - name: Check Capacitor
+        run: |
+          cd "$PROJECT_DIR"
+
+          if [ ! -f capacitor.config.ts ] && \
+             [ ! -f capacitor.config.json ] && \
+             [ ! -f capacitor.config.js ]; then
+            echo "ERROR: Capacitor configuration not found!"
+            exit 1
+          fi
+
+      - name: Prepare Android
+        run: |
+          cd "$PROJECT_DIR"
+
+          if [ ! -d android ]; then
+            npx cap add android
+          fi
+
+          npx cap sync android
+
+      - name: Build APK
+        run: |
+          cd "$PROJECT_DIR/android"
+          chmod +x gradlew
+          ./gradlew assembleDebug --no-daemon
+          echo "APK BUILD COMPLETED"
+
+      - name: Verify APK
+        run: |
+          APK="$PROJECT_DIR/android/app/build/outputs/apk/debug/app-debug.apk"
+
+          if [ ! -f "$APK" ]; then
+            echo "ERROR: APK file was not generated!"
+            exit 1
+          fi
+
+          echo "APK_PATH=$APK" >> "$GITHUB_ENV"
+          ls -lh "$APK"
+
+      - name: Upload NOVA CHAT APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: NOVA-CHAT-APK
+          path: ${{ env.APK_PATH }}
+          if-no-files-found: error
